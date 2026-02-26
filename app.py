@@ -55,10 +55,15 @@ st.sidebar.info("Navigate tabs to explore rankings, correlations, and comparison
 st.title("🚲 Copenhagenize Index 2025")
 st.markdown("Explore infrastructure, policies, and cycling usage across the globe's top 100 cities.")
 
-# Create the 4 main tabs (ADDED TAB 4)
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Regional Overview", "📈 Correlation Explorer", "⚖️ City Comparison", "📏 Indicator Metrics"])
+# Create tabs
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Regional Overview", 
+    "🏙️ City Profile",      
+    "📈 Correlation Explorer", 
+    "⚖️ City Comparison", 
+    "📏 Indicator Metrics"
+    ])
 
-# --- TAB 1: REGIONAL OVERVIEW ---
 with tab1:
     st.subheader(f"State of Cycling: {selected_region}")
     
@@ -94,7 +99,7 @@ with tab1:
         )
         st.plotly_chart(fig, use_container_width=True)
         
-    # ---> NEW MAP SECTION <---
+    # ---> MAP SECTION <---
     st.markdown("### 🗺️ Geographic Viewer")
     if 'Lat' in df_filtered.columns and 'Lon' in df_filtered.columns:
         fig_map = px.scatter_geo(
@@ -125,9 +130,96 @@ with tab1:
     st.markdown("---")
     st.markdown("### Data Viewer")
     st.dataframe(df_filtered, use_container_width=True)
+    
+# --- TAB 2: CITY PROFILE ---
 
-# --- TAB 2: CORRELATION EXPLORER ---
 with tab2:
+    st.subheader("🏙️ City Report")
+    st.markdown("Summary of city's performance, highlighting strengths and critical areas for improvement.")
+    
+    # 1. City Selector (Filtered by the sidebar region)
+    cities_in_region = sorted(df_filtered['City'].unique().tolist())
+    selected_city = st.selectbox("Select a City to view its profile:", cities_in_region)
+    
+    if selected_city:
+        # Extract the exact row of data for this city
+        city_data = df_filtered[df_filtered['City'] == selected_city].iloc[0]
+        
+        st.markdown("---")
+        
+        # 2. KPIs & Gauge Chart
+        col_gauge, col_stats = st.columns([1, 1.5])
+        
+        with col_gauge:
+            # Build Plotly Gauge Chart for the Overall Score
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = city_data['Index Score'],
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': f"<b>{selected_city}</b><br><span style='font-size:0.8em;color:gray'>Overall Index Score</span>"},
+                gauge = {
+                    'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+                    'bar': {'color': "#1f77b4"},
+                    'bgcolor': "white",
+                    'borderwidth': 2,
+                    'bordercolor': "gray",
+                    'steps': [
+                        {'range': [0, 40], 'color': '#ffcccb'},   # Red tint for poor
+                        {'range': [40, 70], 'color': '#ffffcc'},  # Yellow tint for average
+                        {'range': [70, 100], 'color': '#ccffcc'}  # Green tint for excellent
+                    ]
+                }
+            ))
+            fig_gauge.update_layout(height=300, margin=dict(t=50, b=20, l=20, r=20))
+            st.plotly_chart(fig_gauge, use_container_width=True)
+            
+        with col_stats:
+            st.markdown(f"### Global Rank: **#{city_data['Rank']}**")
+            st.markdown(f"**Country:** {city_data['Country']} | **Population:** {city_data['Population']:,}")
+            
+            st.markdown("#### The 3 Core Pillars")
+
+            # Use Streamlit's native progress bars
+            st.write("**Safe & Connected Infrastructure**")
+            st.progress(int(city_data['Safe and Connected Infrastructure']), text=f"{city_data['Safe and Connected Infrastructure']:.1f} / 100")
+            
+            st.write("**Usage & Reach**")
+            st.progress(int(city_data['Usage and Reach']), text=f"{city_data['Usage and Reach']:.1f} / 100")
+            
+            st.write("**Policy & Support**")
+            st.progress(int(city_data['Policy and Support']), text=f"{city_data['Policy and Support']:.1f} / 100")
+            
+        st.markdown("---")
+        
+        # 3. Strengths & Weaknesses
+        st.markdown("### 🔍 Indicator Diagnostics")
+        st.markdown("Based on the 13 sub-indicators, here is where this city excels and where it falls behind.")
+        
+        # 13 score columns
+        score_cols = [c for c in df.columns if 'Score ' in c and c not in ['Index Score', 'Score per Pillar']]
+        
+        # Create a dictionary of the city's scores
+        city_scores = {c.replace('Score ', ''): city_data[c] for c in score_cols if not pd.isna(city_data[c])}
+        
+        # Sort them from highest to lowest
+        sorted_scores = sorted(city_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        col_strength, col_weak = st.columns(2)
+        
+        with col_strength:
+            st.success("#### 🌟 Top 3 Strengths")
+            # Get the top 3
+            for metric, score in sorted_scores[:3]:
+                st.markdown(f"**{metric}:** {score:.1f} / 100")
+                
+        with col_weak:
+            st.error("#### ⚠️ Top 3 Areas for Improvement")
+            # Get the bottom 3
+            for metric, score in reversed(sorted_scores[-3:]):
+                st.markdown(f"**{metric}:** {score:.1f} / 100")
+
+# --- TAB 3: CORRELATION EXPLORER ---
+with tab3:
     st.subheader("📈 Correlation & Policy Impact Explorer")
     st.markdown("Select a City Input (X) and observe its historical relationship with a City Outcome (Y).")
     
@@ -247,8 +339,8 @@ with tab2:
     else:
         st.warning("Please select at least 2 metrics to generate the correlation heatmap.")
 
-# --- TAB 3: CITY COMPARISON ---
-with tab3:
+# --- TAB 4: CITY COMPARISON ---
+with tab4:
     st.subheader("⚖️ Advanced Benchmarking")
     st.markdown("Compare up to 5 cities or regional averages across all 13 Index indicators simultaneously.")
     
@@ -287,13 +379,21 @@ with tab3:
         score_cols = [c for c in df.columns if 'Score ' in c and c not in ['Index Score', 'Score per Pillar']]
         radar_labels = [c.replace('Score ', '') for c in score_cols]
         
+        # ---> To close the circular loop
+        closed_theta = radar_labels + [radar_labels[0]]
+        
         fig_radar = go.Figure()
         colors = ['#1f77b4', '#d62728', '#2ca02c', '#ff7f0e', '#9467bd']
         
         for idx, target in enumerate(selected_targets):
+            
+            # ---> Extract the data values, then append the first value to the end
+            r_vals = [entity_data[target].get(c, 0) for c in score_cols]
+            closed_r = r_vals + [r_vals[0]]
+            
             fig_radar.add_trace(go.Scatterpolar(
-                r=[entity_data[target].get(c, 0) for c in score_cols],
-                theta=radar_labels,
+                r=closed_r,          # Use the closed data list
+                theta=closed_theta,  # Use the closed label list
                 fill='toself' if len(selected_targets) <= 2 else 'none',
                 name=target,
                 line_color=colors[idx]
@@ -312,7 +412,7 @@ with tab3:
         st.markdown("### 📊 Diagnostic table")
         st.markdown("**Raw Data** (actual counts) ➡️ **Correlated Data** (normalized per capita/roadway) ➡️ **Final Score** (0-100).")
         
-        # We define the pipeline for the major indicators that have all 3 tiers
+        #  Define the pipeline for the major indicators that have all 3 tiers
         diagnostic_pipeline = {
             "Bicycle Infrastructure": {
                 "Raw": "Protected_km",
@@ -347,10 +447,10 @@ with tab3:
         for category, metrics in diagnostic_pipeline.items():
             for data_type, col_name in metrics.items():
                 if col_name in df.columns:
-                    # ---> NEW: Clean up the metric name for the display table
+                    # ---> Clean up the metric name for the display table
                     display_metric_name = col_name.replace('_', ' ')
                     
-                    # ---> NEW: Added "Metric" to the row structure
+                    # ---> Added "Metric" to the row structure
                     row_data = {
                         "Indicator": category, 
                         "Data Tier": data_type,
@@ -398,15 +498,15 @@ with tab3:
             column_config={
                 "Indicator": st.column_config.TextColumn("Category", width="medium"),
                 "Data Tier": st.column_config.TextColumn("Data Tier", width="small"),
-                "Metric": st.column_config.TextColumn("Exact Metric", width="large"), # ---> NEW CONFIG
+                "Metric": st.column_config.TextColumn("Exact Metric", width="large"), 
             }
         )
         
         st.caption("🟢 Indicates the benchmark is outperforming the target city. 🔴 Indicates the benchmark is underperforming. (Note: For Safety Raw/Correlated metrics, lower numbers are better).")
 
 
-# --- TAB 4: INDICATOR METRICS (MIN/MAX/AVG/MEDIAN) ---
-with tab4:
+# --- TAB 5: INDICATOR METRICS (MIN/MAX/AVG/MEDIAN) ---
+with tab5:
     st.subheader("📏 Indicator Metrics & Distributions")
     st.markdown("Select a category below to see regional distributions, minimums, maximums, and averages.")
     
