@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+from typing import cast, Literal
 
 # 1. Page Configuration
 st.set_page_config(page_title="Copenhagenize Index 2025 Dashboard", page_icon="🚲", layout="wide")
@@ -74,8 +75,8 @@ with tab1:
     
     col4.metric("Avg Protected Km", round(df_filtered['Protected_km'].mean(), 1))
     
-    st.markdown("### Infrastructure vs. Usage (Bubble Map)")
-    if modal_share_col is not None:
+    st.markdown("### 📈 Infrastructure vs. Usage (Bubble Chart)")
+    if modal_share_col:
         fig = px.scatter(
             df_filtered, 
             x='Infra_density (km of bicycle infra/100 km of roadway)', 
@@ -92,104 +93,157 @@ with tab1:
             template='plotly_white'
         )
         st.plotly_chart(fig, use_container_width=True)
+        
+    # ---> NEW MAP SECTION <---
+    st.markdown("### 🗺️ Geographic Viewer")
+    if 'Lat' in df_filtered.columns and 'Lon' in df_filtered.columns:
+        fig_map = px.scatter_geo(
+            df_filtered,
+            lat='Lat',
+            lon='Lon',
+            color='Index Score', # Color the dots by how high their score is
+            size='Population',   # Size the dots by population
+            hover_name='City',
+            hover_data=['Country', 'Rank', 'Index Score'],
+            projection="natural earth", # Gives curved globe effect
+            color_continuous_scale="Viridis",
+            title="City Locations & Performance"
+        )
+        
+        fig_map.update_layout(
+            margin=dict(l=0, r=0, t=30, b=0),
+            geo=dict(
+                showland=True, landcolor="lightgray",
+                showcoastlines=True, coastlinecolor="white",
+                showcountries=True, countrycolor="white"
+            )
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+    else:
+        st.info("Map data is updating. Please ensure you ran the coordinate fetching script.")
     
+    st.markdown("---")
     st.markdown("### Data Viewer")
     st.dataframe(df_filtered, use_container_width=True)
 
 # --- TAB 2: CORRELATION EXPLORER ---
 with tab2:
-    st.subheader("📈 Correlation Explorer")
-    st.markdown("Discover what drives cycling adoption. *Does budget correlate with usage? Do lower speeds reduce deaths?*")
+    st.subheader("📈 Correlation & Policy Impact Explorer")
+    st.markdown("Select a City Input (X) and observe its historical relationship with a City Outcome (Y).")
     
-    # --- Part 1: X/Y Scatter Plot ---
-    st.markdown("### 1. Direct Comparison (Scatter Plot)")
+    # 1. Categorize variables (Interventions vs Outcomes)
+    interventions = [
+        'Infra_density (km of bicycle infra/100 km of roadway)',
+        'Protected_km',
+        'Spending_per_capita (€/capita/year)',
+        'Bicycle_budget_5yr',
+        'Traffic_30 (% of km of roadway)',
+        'Street_Km_30',
+        'Parking_density (stands/1K pop)',
+        'Score Political Commitment',
+        'Score Urban Planning'
+    ]
     
-    # Get all numeric columns for the dropdowns
-    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
-    numeric_cols = [c for c in numeric_cols if c not in ['Rank', 'Population']] # Exclude boring stats
+    outcomes = [
+        'Modal_share_2024_% \n(or nearest post-Covid)',
+        'Bike_trips_women_%',
+        'Cyclist_deaths',
+        'Safety_rate (rate/100K pop)',
+        'Modal_delta (percentage points)',
+        'Index Score'
+    ]
+    
+    # Ensure columns exist in df
+    interventions = [c for c in interventions if c in df.columns]
+    outcomes = [c for c in outcomes if c in df.columns]
+    
+    st.markdown("### 1. Impact (Scatter Plot)")
     
     col_x, col_y = st.columns(2)
     with col_x:
-        x_axis = st.selectbox("Select X-Axis Metric", numeric_cols, index=numeric_cols.index('Safe and Connected Infrastructure') if 'Safe and Connected Infrastructure' in numeric_cols else 0)
+        x_axis = st.selectbox("Select Intervention (X-Axis)", interventions)
     with col_y:
-        y_axis = st.selectbox("Select Y-Axis Metric", numeric_cols, index=numeric_cols.index('Usage and Reach') if 'Usage and Reach' in numeric_cols else 1)
+        y_axis = st.selectbox("Select Desired Outcome (Y-Axis)", outcomes)
         
-    fig_corr = px.scatter(
-        df_filtered,
-        x=x_axis,
-        y=y_axis,
-        color='Continent',
-        hover_name='City',
-        trendline='ols', # This automatically draws the Line of Best Fit!
-        title=f"Relationship: {x_axis} vs {y_axis}",
-        template='plotly_white'
-    )
-   # ---> IMPROVEMENT: Try/Except block prevents crashes if OLS trendline math fails
+    # Scatter Plot
     try:
         fig_corr = px.scatter(
-            df_filtered,
-            x=x_axis,
-            y=y_axis,
-            color='Continent',
-            hover_name='City',
-            trendline='ols', 
-            title=f"Relationship: {x_axis} vs {y_axis}",
+            df_filtered, x=x_axis, y=y_axis, color='Continent', hover_name='City',
+            trendline='ols', title=f"Impact of {x_axis.split('(')[0].strip()} on {y_axis.split('(')[0].strip()}",
             template='plotly_white'
         )
         st.plotly_chart(fig_corr, use_container_width=True)
+        
+        # --- Analysis of correlations ---
+        # Calculate Pearson correlation coefficient dropping empty rows
+        clean_df = df_filtered[[x_axis, y_axis]].dropna()
+        if len(clean_df) > 5:
+            corr_val = clean_df[x_axis].corr(clean_df[y_axis])
+            
+            # Smart text generation based on the correlation value
+            st.markdown("#### 💡 Insight:")
+            
+            # Handle reverse logic for "Deaths" (where Negative is Good)
+            is_negative_good = "death" in y_axis.lower() or "safety_rate" in y_axis.lower()
+            
+            if corr_val > 0.6:
+                if is_negative_good:
+                    st.error(f"**Warning (Correlation: {corr_val:.2f}):** There is a strong, alarming relationship here. As the intervention increases, fatalities/danger actually increase. This requires immediate auditing.")
+                else:
+                    st.success(f"**Strong Positive Impact (Correlation: {corr_val:.2f}):** The data strongly supports this intervention. Cities that invest heavily in this metric see a reliable, significant increase in the desired outcome.")
+            elif 0.3 < corr_val <= 0.6:
+                if is_negative_good:
+                    st.warning(f"**Concerning Trend (Correlation: {corr_val:.2f}):** There is a moderate relationship showing danger increasing with this metric. Proceed with caution.")
+                else:
+                    st.info(f"**Moderate Positive Impact (Correlation: {corr_val:.2f}):** This intervention contributes to the outcome. But it must be paired with other policies to guarantee results.")
+            elif -0.3 <= corr_val <= 0.3:
+                st.markdown(f"**No Significant Relationship (Correlation: {corr_val:.2f}):** The data shows a random scattering. Changing this input alone does not reliably impacts the chosen outcome.")
+            elif -0.6 <= corr_val < -0.3:
+                if is_negative_good:
+                    st.info(f"**Moderate Safety Benefit (Correlation: {corr_val:.2f}):** There is a moderate relationship showing that this intervention helps reduce fatalities/danger.")
+                else:
+                    st.warning(f"**Negative Impact (Correlation: {corr_val:.2f}):** Surprisingly, as this intervention increases, the outcome tends to drop. Further urban context is required to understand why.")
+            else: # < -0.6
+                if is_negative_good:
+                    st.success(f"**Strong Safety Benefit (Correlation: {corr_val:.2f}):** Excellent policy indicator. Cities that invest in this intervention see a dramatic drop in fatalities and danger.")
+                else:
+                    st.error(f"**Strong Negative Impact (Correlation: {corr_val:.2f}):** There is a stark inverse relationship. This intervention is heavily correlated with a decline in the desired outcome.")
+        else:
+            st.caption("Not enough data points to calculate a reliable insight.")
+            
     except Exception as e:
-        # Fallback: Plot without the trendline if the math fails
-        fig_corr = px.scatter(
-            df_filtered, x=x_axis, y=y_axis, color='Continent', 
-            hover_name='City', title=f"Relationship: {x_axis} vs {y_axis} (Trendline unavailable)",
-            template='plotly_white'
-        )
-        st.plotly_chart(fig_corr, use_container_width=True)
-        st.caption("⚠️ Could not calculate trendline for these specific variables due to data distribution.")
-    
+        st.warning("Could not calculate trendline or insights due to insufficient data variance.")
+
     st.markdown("---")
     
-    # --- Part 2: INTERACTIVE HEATMAP  ---
+    # --- Part 2: INTERACTIVE HEATMAP ---
     st.markdown("### 2. Global Correlation Matrix (Heatmap)")
-    st.markdown("Values closer to **1** (dark red) mean strong positive correlation. Values closer to **-1** (dark blue) mean strong negative correlation.")
+    st.markdown("A macro-view of how metrics move together. Values closer to **1** (dark red) mean strong positive correlation. Values closer to **-1** (dark blue) mean strong negative correlation.")
     
     col_method, col_vars = st.columns([1, 2])
     
     with col_method:
-        corr_method = st.radio(
-            "Select Correlation Method:", 
-            ["pearson", "spearman"], 
-            help="Pearson measures linear relationships. Spearman measures monotonic (ranked) relationships."
-        )
+        corr_method = st.radio("Select Correlation Method:", ["pearson", "spearman"], 
+            help="Pearson measures linear relationships. Spearman measures monotonic (ranked) relationships.")
         
     with col_vars:
-        # We pre-select the 3 main pillars and the Index Score so the chart isn't empty when it loads
-        default_heatmap_cols = ['Index Score', 'Safe and Connected Infrastructure', 'Usage and Reach', 'Policy and Support']
+        # Pre-select highly relevant metrics for a planner's baseline view
+        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+        default_heatmap_cols = ['Index Score', 'Infra_density (km of bicycle infra/100 km of roadway)', 'Modal_share_2024_% \n(or nearest post-Covid)', 'Cyclist_deaths', 'Spending_per_capita (€/capita/year)']
         
         selected_heatmap_cols = st.multiselect(
-            "Select Metrics for the Heatmap (Add or remove variables):",
-            options=numeric_cols,
-            default=[c for c in default_heatmap_cols if c in numeric_cols]
+            "Select Metrics for the Heatmap:",
+            options=[c for c in numeric_cols if c not in ['Rank', 'Population']],
+            default=[c for c in default_heatmap_cols if c in df.columns]
         )
         
     if len(selected_heatmap_cols) > 1:
-        # Automatically calculate the correlation matrix
         corr_matrix = df_filtered[selected_heatmap_cols].corr(method=corr_method)
-        
-        # Build the Heatmap using Plotly
         fig_heat = px.imshow(
-            corr_matrix,
-            text_auto=True, # Show the exact correlation numbers on the squares
-            aspect="auto",
-            color_continuous_scale="RdBu_r", # Red for positive, Blue for negative
-            zmin=-1, zmax=1, # Lock the scale from -1 to 1
-            template='plotly_white'
+            corr_matrix, text_auto=".2f", aspect="auto", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, template='plotly_white'
         )
-        
-        # Make it look clean
         fig_heat.update_layout(height=600, margin=dict(t=20, b=20, l=20, r=20))
-        st.plotly_chart(fig_heat, use_container_width=True)
-        
+        st.plotly_chart(fig_heat, use_container_width=True, key="heatmap")
     else:
         st.warning("Please select at least 2 metrics to generate the correlation heatmap.")
 
@@ -417,7 +471,6 @@ with tab4:
             })
             
             # Format Data Points remain whole numbers
-            # Use correct pandas formatting for style.format
             def formatter(val, col):
                 if col == 'Data Points':
                     return f"{val:.0f}"
