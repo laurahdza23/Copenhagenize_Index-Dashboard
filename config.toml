@@ -1,0 +1,15 @@
+[theme]
+# The main accent color (The Copenhagenize Sky Blue from the brochure cover)
+primaryColor = "#5ab4e5"
+
+# The main background of the app
+backgroundColor = "#ffffff"
+
+# The background of the sidebar and secondary text boxes
+secondaryBackgroundColor = "#f4f6f9"
+
+# The color of the text
+textColor = "#1e1e1e"
+
+# The font family (sans serif looks the most modern for dashboards)
+font = "sans serif"

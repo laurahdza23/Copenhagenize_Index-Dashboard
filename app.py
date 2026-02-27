@@ -4,6 +4,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from typing import cast, Literal
+from fpdf import FPDF
+import base64
 
 # 1. Page Configuration
 st.set_page_config(page_title="Copenhagenize Index 2025 Dashboard", page_icon="🚲", layout="wide")
@@ -16,6 +18,84 @@ def load_data():
     return df
 
 df = load_data()
+
+# --- PDF REPORT GENERATOR  ---
+def generate_pdf_report(city_data, sorted_scores, missing_policies):
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Header
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "BICYCLE-FRIENDLY CITY BENCHMARK REPORT", ln=True, align='C')
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(0, 5, "Based on the Copenhagenize Index 2025 Methodology", ln=True, align='C')
+    pdf.ln(10)
+    
+    # City Title & KPIs
+    pdf.set_font("Arial", 'B', 20)
+    pdf.cell(0, 10, f"{city_data['City']}, {city_data['Country']}", ln=True)
+    pdf.set_font("Arial", '', 12)
+    pdf.cell(0, 8, f"Global Rank: #{city_data['Rank']}   |   Overall Index Score: {city_data['Index Score']:.1f} / 100", ln=True)
+    pdf.cell(0, 8, f"Population: {city_data['Population']:,}", ln=True)
+    pdf.ln(5)
+    
+    # 1. The 3 Core Pillars (With Definitions)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, "1. THE 3 CORE PILLARS", ln=True)
+    pdf.set_font("Arial", '', 11)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, f"Safe & Connected Infrastructure ({city_data['Safe and Connected Infrastructure']:.1f}/100)", ln=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.multi_cell(0, 5, "Measures what cities build: the physical investments and design standards that enable safe, continuous cycling.")
+    pdf.ln(3)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, f"Usage & Reach ({city_data['Usage and Reach']:.1f}/100)", ln=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.multi_cell(0, 5, "Measures what people do: how much, how often and by who cycling is practiced in daily life.")
+    pdf.ln(3)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, f"Policy & Support ({city_data['Policy and Support']:.1f}/100)", ln=True)
+    pdf.set_font("Arial", '', 10)
+    pdf.multi_cell(0, 5, "Measures what makes progress possible: governance, funding, planning and public perception that drive long-term change.")
+    pdf.ln(8)
+    
+    # 2. Diagnostics
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, "2. DIAGNOSTICS", ln=True)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, "Top 3 Strengths:", ln=True)
+    pdf.set_font("Arial", '', 11)
+    for metric, score in sorted_scores[:3]:
+        pdf.cell(0, 6, f"- {metric}: {score:.1f}/100", ln=True)
+    pdf.ln(3)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, "Top 3 Areas for Improvement:", ln=True)
+    pdf.set_font("Arial", '', 11)
+    for metric, score in reversed(sorted_scores[-3:]):
+        pdf.cell(0, 6, f"- {metric}: {score:.1f}/100", ln=True)
+    pdf.ln(8)
+    
+    # 3. Action Items (Moved from UI to PDF)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, "3. STRATEGIC LEVERAGE POINTS ", ln=True)
+    pdf.set_font("Arial", 'I', 10)
+    pdf.multi_cell(0, 5, "The following are low-cost, high-impact administrative and policy implementations currently missing in the city's ecosystem. Enacting these will rapidly accelerate progress.")
+    pdf.ln(3)
+    
+    pdf.set_font("Arial", '', 11)
+    if len(missing_policies) > 0:
+        for policy in missing_policies:
+            pdf.multi_cell(0, 6, f" - {policy}")
+            pdf.ln(2)
+    else:
+        pdf.multi_cell(0, 6, "Excellent performance. The city has already implemented all fundamental policy and administrative baselines tracked by the Index.")
+        
+    return pdf.output(dest="S").encode("latin-1")
 
 # --- INDICATOR DICTIONARY ---
 # Grouping the raw columns into your requested categories
@@ -34,8 +114,12 @@ indicator_categories = {
 }
 
 # 3. Sidebar Filtering
-st.sidebar.title("🚲 Copenhagenize Index 2025")
-st.sidebar.markdown("**Dashboard Analytics**")
+try:
+    st.sidebar.image("logo.png", use_container_width=True)
+except FileNotFoundError:
+    st.sidebar.title("🚲 Copenhagenize") # Fallback if the logo is missing
+
+st.sidebar.markdown("**Benchmark Analytics 2025**")
 st.sidebar.divider()
 
 # Dynamic list of regions for the dropdown
@@ -106,35 +190,44 @@ with tab1:
             df_filtered,
             lat='Lat',
             lon='Lon',
-            color='Index Score', # Color the dots by how high their score is
-            size='Population',   # Size the dots by population
+            color='Index Score', 
+            size='Population',   
             hover_name='City',
-            hover_data=['Country', 'Rank', 'Index Score'],
-            projection="natural earth", # Gives curved globe effect
+            hover_data={
+                'Lat': False, 
+                'Lon': False, 
+                'Country': True, 
+                'Rank': True, 
+                'Index Score': ':.1f',
+                'Population': ':,' 
+            },
+            projection="natural earth", 
             color_continuous_scale="Viridis",
             title="City Locations & Performance"
         )
         
         fig_map.update_layout(
             margin=dict(l=0, r=0, t=30, b=0),
-            geo=dict(
-                showland=True, landcolor="lightgray",
-                showcoastlines=True, coastlinecolor="white",
-                showcountries=True, countrycolor="white"
-            )
+            geo=dict(showland=True, landcolor="lightgray", showcoastlines=True, coastlinecolor="white", showcountries=True, countrycolor="white")
         )
         st.plotly_chart(fig_map, use_container_width=True)
     else:
         st.info("Map data is updating. Please ensure you ran the coordinate fetching script.")
     
     st.markdown("---")
-    st.markdown("### Data Viewer")
-    st.dataframe(df_filtered, use_container_width=True)
+    st.markdown("### 📋 Data Viewer")
+    
+    # Drop Lat/Lon from the table, and format Population with commas
+    display_df = df_filtered.drop(columns=['Lat', 'Lon'], errors='ignore')
+    st.dataframe(
+        display_df.style.format({"Population": "{:,.0f}"}), 
+        use_container_width=True
+    )
     
 # --- TAB 2: CITY PROFILE ---
 
 with tab2:
-    st.subheader("🏙️ City Report")
+    st.subheader("🏙️ City Profile")
     st.markdown("Summary of city's performance, highlighting strengths and critical areas for improvement.")
     
     # 1. City Selector (Filtered by the sidebar region)
@@ -179,8 +272,9 @@ with tab2:
             
             st.markdown("#### The 3 Core Pillars")
 
-            # Use Streamlit's native progress bars
+            #  Streamlit's progress bars
             st.write("**Safe & Connected Infrastructure**")
+            
             st.progress(int(city_data['Safe and Connected Infrastructure']), text=f"{city_data['Safe and Connected Infrastructure']:.1f} / 100")
             
             st.write("**Usage & Reach**")
@@ -217,6 +311,41 @@ with tab2:
             # Get the bottom 3
             for metric, score in reversed(sorted_scores[-3:]):
                 st.markdown(f"**{metric}:** {score:.1f} / 100")
+
+                # --- BACKGROUND CALCULATIONS FOR PDF ---
+        # 1. Strengths/Weaknesses
+        score_cols = [c for c in df.columns if 'Score ' in c and c not in ['Index Score', 'Score per Pillar']]
+        city_scores = {c.replace('Score ', ''): city_data[c] for c in score_cols if not pd.isna(city_data[c])}
+        sorted_scores = sorted(city_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # 2. Quick Wins (Action Engine)
+        quick_wins_map = {
+            "Cycling_masterplan_yes_no": "Draft and formally adopt a dedicated Cycling Masterplan or Sustainable Urban Mobility Plan.",
+            "Cycling_unit_yes_no": "Establish a dedicated 'Cycling Unit' within the city administration.",
+            "Cycling_standards_yes_no": "Adopt official, modern Bicycle Infrastructure Design Standards.",
+            "Cycling_monitoring_yes_no": "Launch a systematic Cycling Data Monitoring & Counting program.",
+            "Household_purchase_subsidy_yes_no": "Introduce a household purchase subsidy program for everyday bicycles and e-bikes.",
+            "Logistics_business_subsidy_yes_no": "Create financial incentives for local businesses adopting cargo bikes.",
+            "PT_integration_yes_no": "Improve physical and fare integration between cycling and Public Transit hubs."
+        }
+        missing_policies = [advice for col, advice in quick_wins_map.items() if col in city_data and city_data[col] == 0]
+
+        st.markdown("---")
+        st.markdown("### 📥 Benchmark Card")
+        st.markdown("Export PDF detailing the city's performance, strengths, and actionable policy interventions.")
+        
+        # Generate the PDF byte stream
+        pdf_data = generate_pdf_report(city_data, sorted_scores, missing_policies)
+        
+        # Streamlit Download Button
+        st.download_button(
+            label=f"📄 Download {selected_city} Benchmark Report (PDF)",
+            data=pdf_data,
+            file_name=f"{selected_city}_Copenhagenize_Report.pdf",
+            mime="application/pdf",
+            type="primary"
+        )
+
 
 # --- TAB 3: CORRELATION EXPLORER ---
 with tab3:
@@ -340,26 +469,63 @@ with tab3:
         st.warning("Please select at least 2 metrics to generate the correlation heatmap.")
 
 # --- TAB 4: CITY COMPARISON ---
+
 with tab4:
-    st.subheader("⚖️ Advanced Benchmarking")
-    st.markdown("Compare up to 5 cities or regional averages across all 13 Index indicators simultaneously.")
+    st.subheader("⚖️ City Benchmarking & Peer Analysis")
+    st.markdown("Compare a city against its most relevant peers. The tool automatically suggests comparable cities based on geographic region and population size.")
     
+    # 1. Build dynamic lists for the options
     cities_list = sorted(df['City'].unique().tolist())
     regions_list = sorted(df['Continent'].dropna().unique().tolist())
-    
     average_options = [f"Average: {r}" for r in regions_list] + ["Average: Global Top 10", "Average: Global Top 30"]
     all_options = cities_list + average_options
     
-    selected_targets = st.multiselect(
-        "Select up to 5 targets to compare:",
-        options=all_options,
-        default=["Copenhagen", "Bogotá", "Average: Global Top 10"],
-        max_selections=5
-    )
+    # 2. UI Layout
+    col_target, col_peers = st.columns([1, 2])
+    
+    with col_target:
+        # Step A: User selects their primary city
+        target_city = st.selectbox(
+            " 1. Select Target City:", 
+            cities_list, 
+            index=cities_list.index('Bogotá') if 'Bogotá' in cities_list else 0
+        )
+        
+    # Step B: Peers comparison algorithm
+    # Get the target city's population and continent
+    target_data = df[df['City'] == target_city].iloc[0]
+    target_pop = target_data['Population']
+    target_continent = target_data['Continent']
+    
+    # Filter for cities in the same continent (excluding the target city) 
+    peers_df = df[(df['Continent'] == target_continent) & (df['City'] != target_city)].copy()
+    
+    # Calculate which cities have the closest population scale
+    peers_df['Pop_Diff'] = abs(peers_df['Population'] - target_pop)
+    
+    # Grab the top 3 closest cities mathematically
+    top_3_peers = peers_df.sort_values('Pop_Diff').head(3)['City'].tolist()
+    
+    # Create Benchmark layout
+    regional_avg = f"Average: {target_continent}"
+    smart_defaults = [target_city, regional_avg] + top_3_peers
+    
+    # Ensure our defaults don't crash if data is missing, and limit to 5
+    valid_defaults = [x for x in smart_defaults if x in all_options][:5]
+    
+    with col_peers:
+        # Step C: The Multiselect automatically populates with the algorithm's results
+        selected_targets = st.multiselect(
+            " 2. Benchmark Peers:",
+            options=all_options,
+            default=valid_defaults,
+            max_selections=5
+        )
 
     if len(selected_targets) == 0:
         st.warning("Please select at least one city or benchmark to compare.")
     else:
+        # Extract and calculate data dynamically for whatever is in the multiselect
         entity_data = {}
         for target in selected_targets:
             if "Average:" in target:
@@ -373,30 +539,42 @@ with tab4:
             else:
                 entity_data[target] = df[df['City'] == target].iloc[0]
 
+
+
         st.markdown("---")
         st.markdown("### 🎯 Indicator Radar")
         
         score_cols = [c for c in df.columns if 'Score ' in c and c not in ['Index Score', 'Score per Pillar']]
         radar_labels = [c.replace('Score ', '') for c in score_cols]
         
-        # ---> To close the circular loop
+        # label to the end to close the circular loop
         closed_theta = radar_labels + [radar_labels[0]]
         
         fig_radar = go.Figure()
-        colors = ['#1f77b4', '#d62728', '#2ca02c', '#ff7f0e', '#9467bd']
+        
+        # A slightly more vibrant palette
+        colors = ['#5ab4e5', '#d62728', '#2ca02c', '#ff7f0e', '#9467bd']
         
         for idx, target in enumerate(selected_targets):
-            
-            # ---> Extract the data values, then append the first value to the end
             r_vals = [entity_data[target].get(c, 0) for c in score_cols]
             closed_r = r_vals + [r_vals[0]]
             
+            # --- NEW: HIGHLIGHT LOGIC ---
+            is_target = (idx == 0) # The first item in the list is always our Target City
+            is_average = "Average:" in target
+            
             fig_radar.add_trace(go.Scatterpolar(
-                r=closed_r,          # Use the closed data list
-                theta=closed_theta,  # Use the closed label list
-                fill='toself' if len(selected_targets) <= 2 else 'none',
-                name=target,
-                line_color=colors[idx]
+                r=closed_r,
+                theta=closed_theta,
+                # The target is ALWAYS filled. Peers are only filled if it's a 1-on-1 comparison.
+                fill='toself' if is_target or len(selected_targets) <= 2 else 'none',
+                name=f"🎯 {target}" if is_target else target,
+                line=dict(
+                    color=colors[idx],
+                    width=4.5 if is_target else 2, # Target line is more than twice as thick
+                    dash='dash' if is_average and not is_target else 'solid' # Averages get dashed lines!
+                ),
+                opacity=1.0 if is_target else 0.65 # Peers are faded into the background slightly
             ))
         
         fig_radar.update_layout(
@@ -407,7 +585,6 @@ with tab4:
             margin=dict(t=40, b=40, l=40, r=40)
         )
         st.plotly_chart(fig_radar, use_container_width=True)
-
        
         st.markdown("### 📊 Diagnostic table")
         st.markdown("**Raw Data** (actual counts) ➡️ **Correlated Data** (normalized per capita/roadway) ➡️ **Final Score** (0-100).")
