@@ -23,22 +23,25 @@ st.markdown("""
 @st.cache_data
 def load_data():
     # Read dataset
-    df = pd.read_csv("master_copenhagenize_data.csv")
+    df = pd.read_csv("master_copenhagenize_data.csv", encoding='latin-1')
     return df
 
 df = load_data()
 
-# --- VECTOR EXPORT CONFIGURATION ---
-# Export as an SVG vector file
-svg_config = {
+# --- EXPORT CONFIGURATION ---
+export_config = {
     'toImageButtonOptions': {
-        'format': 'svg',            # vector format
+        'format': 'png',            # Default format is now PNG
         'filename': 'copenhagenize_chart', 
-        'height': 600,              # Default height 
-        'width': 800,               # Default width
-        'scale': 1                  # Scale factor
+        'height': 800,              
+        'width': 1200,              
+        'scale': 2                  # High-res scaling
     },
-    'displaylogo': False            # Optional: hides the Plotly logo in the menu for a cleaner look
+    'displaylogo': False,
+    'modeBarButtonsToAdd': [
+        'v1hovermode', 
+        'togglespikes'
+    ]
 }
 
 # --- PDF REPORT CONFIGURATION  ---
@@ -146,15 +149,22 @@ except FileNotFoundError:
 st.sidebar.markdown("**Dashboard Analytics 2025**")
 st.sidebar.divider()
 
-# Dynamic list of regions for the dropdown
-regions = ["All Regions"] + sorted(df['Continent'].dropna().unique().tolist())
-selected_region = st.sidebar.selectbox("🌍 Select Region", regions)
+# Dynamic list of regions and benchmark tiers for the dropdown
+regions = ["All Regions", "🌟 Global Top 10", "🌟 Global Top 30"] + sorted(df['Continent'].dropna().unique().tolist())
+selected_region = st.sidebar.selectbox("🌍 Select Region or Tier", regions)
 
 # Filter the data based on the sidebar selection
-if selected_region != "All Regions":
-    df_filtered = df[df['Continent'] == selected_region]
-else:
+if selected_region == "All Regions":
     df_filtered = df.copy()
+elif selected_region == "🌟 Global Top 10":
+    # Grab only the top 10 ranked cities
+    df_filtered = df.nsmallest(10, 'Rank')
+elif selected_region == "🌟 Global Top 30":
+    # Grab only the top 30 ranked cities
+    df_filtered = df.nsmallest(30, 'Rank')
+else:
+    # Filter by specific continent
+    df_filtered = df[df['Continent'] == selected_region]
 
 st.sidebar.divider()
 st.sidebar.info("Navigate tabs to explore rankings, correlations, and comparisons.")
@@ -190,7 +200,7 @@ with tab1:
     
     st.markdown("### 📈 Infrastructure vs. Usage (Bubble Chart)")
     if modal_share_col:
-        fig = px.scatter(
+        fig_bubble = px.scatter(
             df_filtered, 
             x='Infra_density (km of bicycle infra/100 km of roadway)', 
             y=modal_share_col,
@@ -205,7 +215,7 @@ with tab1:
             },
             template='plotly_white'
         )
-        st.plotly_chart(fig, use_container_width=True, config=svg_config)
+        st.plotly_chart(fig_bubble, use_container_width=True, config=export_config)
         
     # ---> MAP SECTION <---
     st.markdown("### 🗺️ Geographic Viewer")
@@ -234,7 +244,7 @@ with tab1:
             margin=dict(l=0, r=0, t=30, b=0),
             geo=dict(showland=True, landcolor="lightgray", showcoastlines=True, coastlinecolor="white", showcountries=True, countrycolor="white")
         )
-        st.plotly_chart(fig_map, use_container_width=True, config=svg_config)
+        st.plotly_chart(fig_map, use_container_width=True, config=export_config)
     else:
         st.info("Map data is updating. Please ensure you ran the coordinate fetching script.")
     
@@ -288,7 +298,7 @@ with tab2:
                 }
             ))
             fig_gauge.update_layout(height=300, margin=dict(t=50, b=20, l=20, r=20))
-            st.plotly_chart(fig_gauge, use_container_width=True, config=svg_config)
+            st.plotly_chart(fig_gauge, use_container_width=True, config=export_config)
             
         with col_stats:
             st.markdown(f"### Global Rank: **#{city_data['Rank']}**")
@@ -376,48 +386,67 @@ with tab3:
     st.subheader("📈 Correlation & Policy Impact Explorer")
     st.markdown("Select a City Input (X) and observe its relationship with a City Outcome (Y).")
     
-    # 1. Categorize variables (Interventions vs Outcomes)
-    interventions = [
+    # 1. Curated list of Correlated, Normalized, and Continuous Metrics
+    # (Excludes raw counts and binary Yes/No policies to ensure clean scatter plots)
+    base_correlated_metrics = [
+        # --- Core Pillars & Overall ---
+        'Index Score',
+        'Safe and Connected Infrastructure',
+        'Usage and Reach',
+        'Policy and Support',
+        
+        # --- Infrastructure & Urban Planning ---
         'Infra_density (km of bicycle infra/100 km of roadway)',
-        'Protected_km',
-        'Spending_per_capita (€/capita/year)',
-        'Bicycle_budget_5yr',
-        'Traffic_30 (% of km of roadway)',
-        'Street_Km_30',
+        'Infra_increase (km of bicycle infra/100 km of roadway)',
         'Parking_density (stands/1K pop)',
-        'Score Political Commitment',
-        'Score Urban Planning'
-    ]
-    
-    outcomes = [
+        'Traffic_30 (% of km of roadway)',
+        
+        # --- Financial & Bike Share ---
+        'Spending_per_capita (€/capita/year)',
+        'Bike_share_cov_density (bikes/1K pop)',
+        'Bike_share_usage (trips/bike/day)',
+        
+        # --- Usage, Demographics & Safety ---
         'Modal_share_2024_% \n(or nearest post-Covid)',
-        'Bike_trips_women_%',
-        'Cyclist_deaths',
-        'Safety_rate (rate/100K pop)',
+        'Modal_share_2019_% \n(or nearest pre-Covid)',
         'Modal_delta (percentage points)',
-        'Index Score'
+        'Bike_trips_women_%',
+        'Safety_rate (rate/100K pop)'
     ]
     
-    # Ensure columns exist in df
-    interventions = [c for c in interventions if c in df.columns]
-    outcomes = [c for c in outcomes if c in df.columns]
+    # Automatically grab all the 0-100 sub-indicator scores as well
+    score_cols = [c for c in df.columns if 'Score ' in c and c not in ['Index Score', 'Score per Pillar']]
+    
+    # Combine the lists and ensure they actually exist in the loaded dataframe
+    all_correlated_metrics = base_correlated_metrics + score_cols
+    valid_metrics = [c for c in all_correlated_metrics if c in df.columns]
     
     st.markdown("### 1. Impact (Scatter Plot)")
     
     col_x, col_y = st.columns(2)
     with col_x:
-        x_axis = st.selectbox("Select Intervention (X-Axis)", interventions)
+        # Set a logical default for the X-axis (an intervention)
+        default_x = 'Infra_density (km of bicycle infra/100 km of roadway)'
+        x_idx = valid_metrics.index(default_x) if default_x in valid_metrics else 0
+        x_axis = st.selectbox("Select X-Axis Metric", valid_metrics, index=x_idx)
+        
     with col_y:
-        y_axis = st.selectbox("Select Desired Outcome (Y-Axis)", outcomes)
+        # Set a logical default for the Y-axis (an outcome)
+        default_y = 'Modal_share_2024_% \n(or nearest post-Covid)'
+        y_idx = valid_metrics.index(default_y) if default_y in valid_metrics else 1
+        y_axis = st.selectbox("Select Y-Axis Metric", valid_metrics, index=y_idx)
         
     # Scatter Plot
     try:
         fig_corr = px.scatter(
             df_filtered, x=x_axis, y=y_axis, color='Continent', hover_name='City',
-            trendline='ols', title=f"Impact of {x_axis.split('(')[0].strip()} on {y_axis.split('(')[0].strip()}",
+            trendline='ols', 
+            trendline_scope='overall',         # Draws ONE line for all data
+            trendline_color_override='black',  # Makes the global line stand out
+            title=f"Impact of {x_axis.split('(')[0].strip()} on {y_axis.split('(')[0].strip()}",
             template='plotly_white'
         )
-        st.plotly_chart(fig_corr, use_container_width=True, config=svg_config)
+        st.plotly_chart(fig_corr, use_container_width=True, config=export_config)
         
         # --- Analysis of correlations ---
         # Calculate Pearson correlation coefficient dropping empty rows
@@ -489,7 +518,7 @@ with tab3:
             corr_matrix, text_auto=True, aspect="auto", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, template='plotly_white'
         )
         fig_heat.update_layout(height=600, margin=dict(t=20, b=20, l=20, r=20))
-        st.plotly_chart(fig_heat, use_container_width=True, key="heatmap", config=svg_config)
+        st.plotly_chart(fig_heat, use_container_width=True, key="heatmap", config=export_config)
     else:
         st.warning("Please select at least 2 metrics to generate the correlation heatmap.")
 
@@ -608,7 +637,7 @@ with tab4:
             template='plotly_white',
             margin=dict(t=40, b=40, l=40, r=40)
         )
-        st.plotly_chart(fig_radar, use_container_width=True, config=svg_config)
+        st.plotly_chart(fig_radar, use_container_width=True, config=export_config)
        
         st.markdown("### 📊 Diagnostic table")
         st.markdown("**Raw Data** ➡️ **Correlated Data** (normalized) ➡️ **Final Score** (0-100).")
@@ -765,7 +794,7 @@ with tab5:
                         legend_title_text="Policy Implemented?"
                     )
                     
-                    st.plotly_chart(fig_map, use_container_width=True, config=svg_config, key=f"map_{metric}")
+                    st.plotly_chart(fig_map, use_container_width=True, config=export_config, key=f"map_{metric}")
                     
                     # Optional: Keep the regional bar chart inside an expander for quick summary stats
                     with st.expander("📊 View Regional Percentage Summary"):
@@ -778,7 +807,7 @@ with tab5:
                             template='plotly_white'
                         )
                         fig_bar.update_yaxes(range=[0, 100])
-                        st.plotly_chart(fig_bar, use_container_width=True, config=svg_config, key=f"bar_{metric}")
+                        st.plotly_chart(fig_bar, use_container_width=True, config=export_config, key=f"bar_{metric}")
                 else:
                     st.warning("Map data is missing. Please ensure you ran the coordinate fetching script.")
             
@@ -794,15 +823,26 @@ with tab5:
                     hover_name="City",
                     template='plotly_white'
                 )
-                st.plotly_chart(fig_box, use_container_width=True, key=f"box_{metric}", config=svg_config)
+                st.plotly_chart(fig_box, use_container_width=True, key=f"box_{metric}", config=export_config)
             
             # Generate the pandas describe() summary table
             st.markdown("**Statistical Summary (Grouped by Region):**")
             
-            # Calculate the describe stats and format 
+            # 1. Calculate the base describe stats for the currently filtered data
             summary_stats = df_filtered.groupby('Continent')[metric].describe()
             
-            # Rename columns to be more readable 
+            # 2. Calculate stable benchmark rows using the UNFILTERED global dataframe (df)
+            top10_stats = df.nsmallest(10, 'Rank')[metric].describe().to_frame().T
+            top10_stats.index = ['🌟 Global Top 10']
+            
+            top30_stats = df.nsmallest(30, 'Rank')[metric].describe().to_frame().T
+            top30_stats.index = ['🌟 Global Top 30']
+            
+            # 3. Append the benchmark rows to the bottom of the regional summary
+            # (We use pd.concat to cleanly merge the dataframes)
+            summary_stats = pd.concat([summary_stats, top10_stats, top30_stats])
+            
+            # 4. Rename columns to be more readable 
             summary_stats = summary_stats.rename(columns={
                 'count': 'Data Points',
                 'mean': 'Average',
@@ -814,7 +854,7 @@ with tab5:
                 'max': 'Maximum'
             })
             
-            # Format Data Points remain whole numbers
+            # 5. Format the table (Data points as whole numbers, stats as 2 decimals)
             st.dataframe(
                 summary_stats.style.format({col: (lambda x: f"{x:.0f}" if col == 'Data Points' else f"{x:.2f}") for col in summary_stats.columns}),
                 use_container_width=True
