@@ -6,6 +6,7 @@ import numpy as np
 from typing import cast, Literal
 from fpdf import FPDF
 import base64
+import scipy.stats as stats
 
 # 1. Page Configuration
 st.set_page_config(page_title="Copenhagenize Index 2025 Dashboard", page_icon="🚲", layout="wide")
@@ -29,22 +30,6 @@ def load_data():
     return df
 
 df = load_data()
-
-# --- EXPORT CONFIGURATION ---
-export_config = {
-    'toImageButtonOptions': {
-        'format': 'png',            # Default format is now PNG
-        'filename': 'copenhagenize_chart', 
-        'height': 800,              
-        'width': 1200,              
-        'scale': 2                  # High-res scaling
-    },
-    'displaylogo': False,
-    'modeBarButtonsToAdd': [
-        'v1hovermode', 
-        'togglespikes'
-    ]
-}
 
 # --- PDF REPORT CONFIGURATION  ---
 def generate_pdf_report(city_data, sorted_scores, missing_policies):
@@ -152,25 +137,72 @@ st.sidebar.markdown("**Dashboard Analytics 2025**")
 st.sidebar.divider()
 
 
-# Dynamic list of regions and benchmark tiers for the dropdown
+# --- Region Selector ---
 regions = ["All Regions", "🌟 Global Top 10", "🌟 Global Top 30"] + sorted(df['Continent'].dropna().unique().tolist())
 selected_region = st.sidebar.selectbox("🌍 Select Region or Tier", regions)
 
-# Filter the data based on the sidebar selection
+# --- Population Range Selector (Multi-Select) ---
+pop_options = ["< 500,000", "500,000 - 1.5 million", "1.5 - 3 million", "> 3 million"]
+selected_pops = st.sidebar.multiselect(
+    "👥 Select Population Sizes", 
+    options=pop_options,
+    default=pop_options # Defaults to showing all sizes so the dashboard isn't blank
+)
+
+# Apply Region Filter
 if selected_region == "All Regions":
     df_filtered = df.copy()
 elif selected_region == "🌟 Global Top 10":
-    # Grab only the top 10 ranked cities
     df_filtered = df.nsmallest(10, 'Rank')
 elif selected_region == "🌟 Global Top 30":
-    # Grab only the top 30 ranked cities
     df_filtered = df.nsmallest(30, 'Rank')
 else:
-    # Filter by specific continent
     df_filtered = df[df['Continent'] == selected_region]
 
+# Apply Population Filter (Multi-select logic)
+if len(selected_pops) == 0:
+    # If the user clears the box, show an empty dataframe
+    df_filtered = df_filtered.iloc[0:0] 
+else:
+    # Create an empty filter mask
+    pop_mask = pd.Series(False, index=df_filtered.index)
+    
+    # Add an OR (|) condition for every option the user selected
+    if "< 500,000" in selected_pops:
+        pop_mask |= (df_filtered['Population'] < 500000)
+    if "500,000 - 1.5 million" in selected_pops:
+        pop_mask |= ((df_filtered['Population'] >= 500000) & (df_filtered['Population'] <= 1500000))
+    if "1.5 - 3 million" in selected_pops:
+        pop_mask |= ((df_filtered['Population'] > 1500000) & (df_filtered['Population'] <= 3000000))
+    if "> 3 million" in selected_pops:
+        pop_mask |= (df_filtered['Population'] > 3000000)
+        
+    # Apply the combined mask to the dataframe
+    df_filtered = df_filtered[pop_mask]
+
 st.sidebar.divider()
+
 st.sidebar.info("Navigate tabs to explore rankings, correlations, and comparisons.")
+
+st.sidebar.divider()
+
+# --- Export Settings (SVG/PNG) ---
+st.sidebar.markdown("**⚙️ Export Settings**")
+download_format = st.sidebar.radio("Default Chart Download Format", ["png", "svg"], horizontal=True)
+
+export_config = {
+    'toImageButtonOptions': {
+        'format': download_format,               # Dynamically updates to SVG or PNG
+        'filename': 'copenhagenize_chart', 
+        'height': 800,              
+        'width': 1200,              
+        'scale': 2 if download_format == 'png' else 1  # High-res for PNG, 1 for vector SVG
+    },
+    'displaylogo': False,
+    'modeBarButtonsToAdd': ['v1hovermode', 'togglespikes']
+}
+
+
 
 # 4. Main App Layout
 st.title("🚲 Copenhagenize Index 2025")
@@ -186,6 +218,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🏛️ 3 Core Pillars"
     ])
 
+# --- TAB 1: REGIONAL OVERVIEW ---
 with tab1:
     st.subheader(f"State of Cycling: {selected_region}")
     
@@ -307,17 +340,13 @@ with tab2:
         with col_stats:
             st.markdown(f"### Global Rank: **#{city_data['Rank']}**")
             st.markdown(f"**Country:** {city_data['Country']} | **Population:** {city_data['Population']:,}")
-            
             st.markdown("#### The 3 Core Pillars")
 
             #  Streamlit's progress bars
             st.write("**Safe & Connected Infrastructure**")
-            
             st.progress(int(city_data['Safe and Connected Infrastructure']), text=f"{city_data['Safe and Connected Infrastructure']:.1f} / 100")
-            
             st.write("**Usage & Reach**")
             st.progress(int(city_data['Usage and Reach']), text=f"{city_data['Usage and Reach']:.1f} / 100")
-            
             st.write("**Policy & Support**")
             st.progress(int(city_data['Policy and Support']), text=f"{city_data['Policy and Support']:.1f} / 100")
             
@@ -350,12 +379,7 @@ with tab2:
             for metric, score in reversed(sorted_scores[-3:]):
                 st.markdown(f"**{metric}:** {score:.1f} / 100")
 
-                # --- BACKGROUND CALCULATIONS FOR PDF ---
-        # 1. Strengths/Weaknesses
-        score_cols = [c for c in df.columns if 'Score ' in c and c not in ['Index Score', 'Score per Pillar']]
-        city_scores = {c.replace('Score ', ''): city_data[c] for c in score_cols if not pd.isna(city_data[c])}
-        sorted_scores = sorted(city_scores.items(), key=lambda x: x[1], reverse=True)
-        
+             
         # 2. Quick Wins 
         quick_wins_map = {
             "Cycling_masterplan_yes_no": "Draft and formally adopt a dedicated Cycling Masterplan or Sustainable Urban Mobility Plan.",
@@ -453,10 +477,20 @@ with tab3:
         st.plotly_chart(fig_corr, use_container_width=True, config=export_config)
         
         # --- Analysis of correlations ---
-        # Calculate Pearson correlation coefficient dropping empty rows
+        # Calculate regression and correlation coefficients dropping empty rows
         clean_df = df_filtered[[x_axis, y_axis]].dropna()
-        if len(clean_df) > 5:
-            corr_val = clean_df[x_axis].corr(clean_df[y_axis])
+        n = len(clean_df)
+        
+        if n > 5:
+            # Using scipy.stats to get all the advanced metrics instantly
+            slope, intercept, r_value, p_value, std_err = stats.linregress(clean_df[x_axis], clean_df[y_axis])
+            r_squared = r_value ** 2
+            
+            # Calculate 95% Confidence Interval for the slope
+            # We use a t-distribution because our sample size (n) might be small
+            t_crit = stats.t.ppf(0.975, n - 2)
+            ci_lower = slope - (t_crit * std_err)
+            ci_upper = slope + (t_crit * std_err)
             
             # Smart text generation based on the correlation value
             st.markdown("#### 💡 Insight:")
@@ -464,28 +498,55 @@ with tab3:
             # Handle reverse logic for "Deaths" (where Negative is Good)
             is_negative_good = "death" in y_axis.lower() or "safety_rate" in y_axis.lower()
             
-            if corr_val > 0.6:
+            if r_value > 0.6:
                 if is_negative_good:
-                    st.error(f"**Warning (Correlation: {corr_val:.2f}):** There is a strong, alarming relationship here. As the intervention increases, fatalities/danger actually increase. This requires immediate auditing.")
+                    st.error(f"**Warning (Correlation: {r_value:.2f}):** There is a strong, alarming relationship here. As the intervention increases, fatalities/danger actually increase. This requires immediate auditing.")
                 else:
-                    st.success(f"**Strong Positive Impact (Correlation: {corr_val:.2f}):** The data strongly supports this intervention. Cities that invest heavily in this metric see a reliable, significant increase in the desired outcome.")
-            elif 0.3 < corr_val <= 0.6:
+                    st.success(f"**Strong Positive Impact (Correlation: {r_value:.2f}):** The data strongly supports this intervention. Cities that invest heavily in this metric see a reliable, significant increase in the desired outcome.")
+            elif 0.3 < r_value <= 0.6:
                 if is_negative_good:
-                    st.warning(f"**Concerning Trend (Correlation: {corr_val:.2f}):** There is a moderate relationship showing danger increasing with this metric. Proceed with caution.")
+                    st.warning(f"**Concerning Trend (Correlation: {r_value:.2f}):** There is a moderate relationship showing danger increasing with this metric. Proceed with caution.")
                 else:
-                    st.info(f"**Moderate Positive Impact (Correlation: {corr_val:.2f}):** This intervention contributes to the outcome. But it must be paired with other policies to guarantee results.")
-            elif -0.3 <= corr_val <= 0.3:
-                st.markdown(f"**No Significant Relationship (Correlation: {corr_val:.2f}):** The data shows a random scattering. Changing this input alone does not reliably impacts the chosen outcome.")
-            elif -0.6 <= corr_val < -0.3:
+                    st.info(f"**Moderate Positive Impact (Correlation: {r_value:.2f}):** This intervention contributes to the outcome. But it must be paired with other policies to guarantee results.")
+            elif -0.3 <= r_value <= 0.3:
+                st.markdown(f"**No Significant Relationship (Correlation: {r_value:.2f}):** The data shows a random scattering. Changing this input alone does not reliably impacts the chosen outcome.")
+            elif -0.6 <= r_value < -0.3:
                 if is_negative_good:
-                    st.info(f"**Moderate Safety Benefit (Correlation: {corr_val:.2f}):** There is a moderate relationship showing that this intervention helps reduce fatalities/danger.")
+                    st.info(f"**Moderate Safety Benefit (Correlation: {r_value:.2f}):** There is a moderate relationship showing that this intervention helps reduce fatalities/danger.")
                 else:
-                    st.warning(f"**Negative Impact (Correlation: {corr_val:.2f}):** Surprisingly, as this intervention increases, the outcome tends to drop. Further urban context is required to understand why.")
+                    st.warning(f"**Negative Impact (Correlation: {r_value:.2f}):** Surprisingly, as this intervention increases, the outcome tends to drop. Further urban context is required to understand why.")
             else: # < -0.6
                 if is_negative_good:
-                    st.success(f"**Strong Safety Benefit (Correlation: {corr_val:.2f}):** Excellent policy indicator. Cities that invest in this intervention see a dramatic drop in fatalities and danger.")
+                    st.success(f"**Strong Safety Benefit (Correlation: {r_value:.2f}):** Excellent policy indicator. Cities that invest in this intervention see a dramatic drop in fatalities and danger.")
                 else:
-                    st.error(f"**Strong Negative Impact (Correlation: {corr_val:.2f}):** There is a stark inverse relationship. This intervention is heavily correlated with a decline in the desired outcome.")
+                    st.error(f"**Strong Negative Impact (Correlation: {r_value:.2f}):** There is a stark inverse relationship. This intervention is heavily correlated with a decline in the desired outcome.")
+                    
+            # ---> NEW: DEEPER STATISTICAL INTERPRETATION <---
+            with st.expander("📊 View Deeper Statistical Interpretation"):
+                
+                # Format p-value cleanly
+                p_text = f"{p_value:.4f}" if p_value >= 0.0001 else "< 0.0001"
+                sig_text = "✅ Statistically Significant" if p_value < 0.05 else "⚠️ Not Statistically Significant"
+                
+                # Format slope and CI using general format (.4g) in case of very small/large numbers
+                st.markdown(f"**1. Pearson Correlation (r):** `{r_value:.2f}`")
+                st.markdown("*Measures the strength and direction of the linear relationship (1.0 is perfect positive, -1.0 is perfect negative).*")
+                
+                st.markdown(f"**2. Explained Variance (R²):** `{r_squared:.2f}`")
+                st.markdown(f"*Mathematically, **{r_squared*100:.1f}%** of the variation in `{y_axis.split('(')[0].strip()}` is directly explained by changes in `{x_axis.split('(')[0].strip()}`.*")
+                
+                st.markdown(f"**3. Sample Size (n):** `{n}` cities")
+                st.markdown("*The number of cities with valid data points for both metrics. Larger samples yield more reliable statistics.*")
+                
+                st.markdown(f"**4. P-Value:** `{p_text}` ({sig_text})")
+                st.markdown("*Measures the probability that this relationship occurred by random chance. A standard threshold for validity is p < 0.05.*")
+                
+                st.markdown(f"**5. Regression Slope (β):** `{slope:.4g}`")
+                st.markdown(f"*For every 1-unit increase in the X-axis, the Y-axis changes by exactly {slope:.4g} units.*")
+                
+                st.markdown(f"**6. 95% Confidence Interval (Slope):** `[{ci_lower:.4g}, {ci_upper:.4g}]`")
+                st.markdown("*We are 95% confident the true impact (slope) falls within this range. If this range crosses zero (e.g., goes from negative to positive), the true effect is uncertain.*")
+                
         else:
             st.caption("Not enough data points to calculate a reliable insight.")
             
@@ -497,34 +558,57 @@ with tab3:
     # --- Part 2: INTERACTIVE HEATMAP ---
     st.markdown("### 2. Global Correlation Matrix (Heatmap)")
     st.markdown("A macro-view of how metrics move together. Values closer to **1** (dark red) mean strong positive correlation. Values closer to **-1** (dark blue) mean strong negative correlation.")
-    
+       
     col_method, col_vars = st.columns([1, 2])
-    
     with col_method:
-        corr_method = st.radio("Select Correlation Method:", ["pearson", "spearman"], 
-            help="Pearson measures linear relationships. Spearman measures monotonic (ranked) relationships.")
-        
+        corr_method = st.radio("Select Correlation Method:", ["pearson", "spearman"])
     with col_vars:
-        # Pre-select highly relevant metrics for a planner's baseline view
         numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
         default_heatmap_cols = ['Index Score', 'Infra_density (km of bicycle infra/100 km of roadway)', 'Modal_share_2024_% \n(or nearest post-Covid)', 'Cyclist_deaths', 'Spending_per_capita (€/capita/year)']
+        selected_heatmap_cols = st.multiselect("Select Metrics for the Heatmap:", options=[c for c in numeric_cols if c not in ['Rank', 'Population']], default=[c for c in default_heatmap_cols if c in df.columns])
         
-        selected_heatmap_cols = st.multiselect(
-            "Select Metrics for the Heatmap:",
-            options=[c for c in numeric_cols if c not in ['Rank', 'Population']],
-            default=[c for c in default_heatmap_cols if c in df.columns]
-        )
-        
-    if len(selected_heatmap_cols) > 1:
+    if len(selected_heatmap_cols) > 1 and not df_filtered.empty:
         corr_method_literal = cast(Literal["pearson", "kendall", "spearman"], corr_method if corr_method in ["pearson", "kendall", "spearman"] else "pearson")
         corr_matrix = df_filtered[selected_heatmap_cols].corr(method=corr_method_literal)
-        fig_heat = px.imshow(
-            corr_matrix, text_auto=True, aspect="auto", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, template='plotly_white'
-        )
+        
+        # Draw the Heatmap
+        fig_heat = px.imshow(corr_matrix, text_auto=True, aspect="auto", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, template='plotly_white')
         fig_heat.update_layout(height=600, margin=dict(t=20, b=20, l=20, r=20))
         st.plotly_chart(fig_heat, use_container_width=True, key="heatmap", config=export_config)
-    else:
-        st.warning("Please select at least 2 metrics to generate the correlation heatmap.")
+        
+        # ---> DYNAMIC HEATMAP INTERPRETATION EXPANDER <---
+        with st.expander("📊 View Heatmap Interpretation & Automated Insights"):
+            st.markdown("**How to read this matrix:**")
+            st.markdown("- **Dark Red (Closer to 1.0):** Strong positive correlation. As one metric increases, the other reliably increases.")
+            st.markdown("- **Dark Blue (Closer to -1.0):** Strong negative/inverse correlation. As one metric increases, the other reliably decreases.")
+            st.markdown("- **White/Light Colors (Closer to 0):** No mathematical relationship. The metrics move independently of each other.")
+            
+            st.markdown(f"**Current Method Context: {corr_method.capitalize()}**")
+            if corr_method == 'pearson':
+                st.markdown("*Pearson measures **linear** relationships (do they move together at a consistent, straight-line rate?). It is best for comparing hard, continuous physical metrics.*")
+            else:
+                st.markdown("*Spearman measures **rank-based** relationships (if City A outranks City B in Metric 1, does it also outrank it in Metric 2?). It is best when comparing abstract scores or indexes.*")
+            
+            # ---  Matrix Interpretation ---
+            st.markdown("**Matrix Insights:**")
+            
+            # Mask the upper triangle and diagonal to avoid duplicate pairings and self-correlations (1.0)
+            mask = np.tril(np.ones_like(corr_matrix, dtype=bool), k=-1)
+            lower_tri = corr_matrix.where(mask)
+            
+            # Extract Max and Min correlations
+            max_val = lower_tri.max().max()
+            min_val = lower_tri.min().min()
+            
+            if pd.notna(max_val):
+                max_idx = lower_tri.stack().idxmax()
+                st.markdown(f"- **Strongest Positive Pairing:** `{max_idx[0].split('(')[0].strip()}` 🤝 `{max_idx[1].split('(')[0].strip()}` (r = **{max_val:.2f}**)")
+                
+            if pd.notna(min_val):
+                min_idx = lower_tri.stack().idxmin()
+                st.markdown(f"- **Strongest Inverse Pairing:** `{min_idx[0].split('(')[0].strip()}` ⚖️ `{min_idx[1].split('(')[0].strip()}` (r = **{min_val:.2f}**)")
+                
+            st.caption("*Note: The matrix automatically filters out self-correlations (1.0) when finding the strongest pairs.*")
 
 # --- TAB 4: CITY COMPARISON ---
 
@@ -742,154 +826,89 @@ with tab4:
 # --- TAB 5: INDICATOR METRICS (MIN/MAX/AVG/MEDIAN) ---
 with tab5:
     st.subheader("📏 Indicator Metrics & Distributions")
-    st.markdown("Select a category below to see regional distributions, minimums, maximums, and averages.")
+    st.markdown("Select multiple indicators from across the index to view regional distributions, and statistical summaries.")
     
-    # Category Selector
-    selected_category = st.selectbox("📂 Select Indicator Category:", list(indicator_categories.keys()))
-    
-    metrics_to_show = indicator_categories[selected_category]
-    
-    # Loop through the specific metrics for that category
-    for metric in metrics_to_show:
-        if metric in df_filtered.columns:
-            st.markdown(f"### 🔹 {metric.replace('_', ' ')}")
-            
-            # Check if the metric is Binary (Yes/No, 0/1) or Continuous (Km, %, etc.)
-            unique_vals = df[metric].dropna().unique()
-            is_binary = set(unique_vals).issubset({0, 1})
-            
-            if is_binary:
-                # ---> Geographic Map for Yes/No Policies
-                st.markdown("*Geographic distribution of cities that have implemented this policy.*")
-                
-                # Check if we have coordinates
-                if 'Lat' in df_filtered.columns and 'Lon' in df_filtered.columns:
-                    # Create a clean display dataframe for the map
-                    map_df = df_filtered.copy()
-                    
-                    # Map the 1/0 integers to "Yes" and "No" strings so the map legend looks professional
-                    map_df['Status'] = map_df[metric].map({1: 'Yes', 0: 'No', 1.0: 'Yes', 0.0: 'No'})
-                    
-                    # Drop rows that are missing coordinates or data for this specific metric
-                    map_df = map_df.dropna(subset=['Status', 'Lat', 'Lon'])
-                    
-                    fig_map = px.scatter_geo(
-                        map_df,
-                        lat='Lat',
-                        lon='Lon',
-                        color='Status',
-                        color_discrete_map={'Yes': '#1BBBEC', 'No': '#D53C4C'}, # Copenhagenize Green and Warning Red
-                        hover_name='City',
-                        hover_data={'Lat': False, 'Lon': False, 'Country': True, 'Status': True, metric: False},
-                        projection="natural earth",
-                        title=f"Global Adoption: {metric.replace('_', ' ')}"
-                    )
-                    
-                    # Make the dots a bit larger and add a white border so they pop against the map
-                    fig_map.update_traces(marker=dict(size=9, line=dict(width=1, color='white')))
-                    
-                    fig_map.update_layout(
-                        margin=dict(l=0, r=0, t=40, b=0),
-                        geo=dict(
-                            showland=True, landcolor="#f4f6f9", 
-                            showcoastlines=True, coastlinecolor="white", 
-                            showcountries=True, countrycolor="white"
-                        ),
-                        legend_title_text="Policy Implemented?"
-                    )
-                    
-                    st.plotly_chart(fig_map, use_container_width=True, config=export_config, key=f"map_{metric}")
-                    
-                    # Optional: Keep the regional bar chart inside an expander for quick summary stats
-                    with st.expander("📊 View Regional Percentage Summary"):
-                        agg_df = df_filtered.groupby('Continent')[metric].mean().reset_index()
-                        agg_df[metric] = agg_df[metric] * 100 # Convert to percentage
-                        
-                        fig_bar = px.bar(
-                            agg_df, x='Continent', y=metric, color='Continent',
-                            labels={metric: '% of Cities (Yes)'},
-                            template='plotly_white'
-                        )
-                        fig_bar.update_yaxes(range=[0, 100])
-                        st.plotly_chart(fig_bar, use_container_width=True, config=export_config, key=f"bar_{metric}")
-                else:
-                    st.warning("Map data is missing. Please ensure you ran the coordinate fetching script.")
-            
-            else:
-                # ---> Box Plot for Continuous Metrics
-                st.markdown("*Regional distribution and outliers for this metric.*")
-                fig_box = px.box(
-                    df_filtered, 
-                    x='Continent', 
-                    y=metric, 
-                    color='Continent', 
-                    points="all", # Shows the individual cities as dots next to the box
-                    hover_name="City",
-                    template='plotly_white'
-                )
-                st.plotly_chart(fig_box, use_container_width=True, key=f"box_{metric}", config=export_config)
-            
-            # Generate the pandas describe() summary table
-            st.markdown("**Statistical Summary (Grouped by Region):**")
-            
-            # 1. Calculate the base describe stats for the currently filtered data
-            summary_stats = df_filtered.groupby('Continent')[metric].describe()
-            
-            # 2. Calculate stable benchmark rows using the UNFILTERED global dataframe (df)
-            top10_stats = df.nsmallest(10, 'Rank')[metric].describe().to_frame().T
-            top10_stats.index = ['🌟 Global Top 10']
-            
-            top30_stats = df.nsmallest(30, 'Rank')[metric].describe().to_frame().T
-            top30_stats.index = ['🌟 Global Top 30']
-            
-            global100_stats = df[metric].describe().to_frame().T
-            global100_stats.index = ['🌟 Global 100']
-            
-            # 3. Append the benchmark rows to the bottom of the regional summary
-            summary_stats = pd.concat([summary_stats, top10_stats, top30_stats, global100_stats])
-            
-            # 4. Rename columns to be more readable 
-            summary_stats = summary_stats.rename(columns={
-                'count': 'Data Points',
-                'mean': 'Average',
-                'std': 'Std Dev',
-                'min': 'Minimum',
-                '25%': '25th Pct',
-                '50%': 'Median',
-                '75%': '75th Pct',
-                'max': 'Maximum'
-            })
-            
-            # 5. Format the table (Data points as whole numbers, stats as 2 decimals)
-            st.dataframe(
-                summary_stats.style.format({col: (lambda x: f"{x:.0f}" if col == 'Data Points' else f"{x:.2f}") for col in summary_stats.columns}),
-                use_container_width=True
-            )
-            
-            # ---> City Ranking Table
-            with st.expander(f"🏅 View City Rankings: {metric.replace('_', ' ')}"):
-                # Determine sort order: Safety metrics (lower is better) sort ascending
-                is_lower_better = "death" in metric.lower() or "safety_rate" in metric.lower()
-                
-                # Create a clean dataframe for ranking
-                ranking_df = df_filtered[['City', 'Country', 'Continent', metric]].dropna(subset=[metric])
-                ranking_df = ranking_df.sort_values(by=metric, ascending=is_lower_better)
-                
-                # Reset index to show a clean ranking number (1, 2, 3...)
-                ranking_df = ranking_df.reset_index(drop=True)
-                ranking_df.index = ranking_df.index + 1 # Start index at 1 instead of 0
-                
-                # Format and display the dataframe
-                if is_binary:
-                    ranking_df[metric] = ranking_df[metric].map({1: 'Yes', 0: 'No', 1.0: 'Yes', 0.0: 'No'})
-                    st.dataframe(ranking_df, use_container_width=True)
-                else:
-                    st.dataframe(
-                        ranking_df.style.format({metric: "{:.2f}"}),
-                        use_container_width=True
-                    )
-            st.markdown("---")
+     # 1. Flatten the dictionary so we can search/select any indicator
+    all_indicators_flat = []
+    for cat, metrics in indicator_categories.items():
+        for m in metrics:
+            if m not in all_indicators_flat:
+                all_indicators_flat.append(m)
 
+    # 2. Multi-Selector allows choosing multiple indicators to compare directly
+    selected_metrics = st.multiselect(
+        "📂 Select Indicators to Analyze:",
+        options=all_indicators_flat,
+        default=indicator_categories["Infrastructure"]
+    )
+    
+    # Loop through the multiple selected metrics
+    if not df_filtered.empty:
+        for metric in selected_metrics:
+            if metric in df_filtered.columns:
+                st.markdown(f"### 🔹 {metric.replace('_', ' ')}")
+                
+                unique_vals = df[metric].dropna().unique()
+                is_binary = set(unique_vals).issubset({0, 1})
+                
+                if is_binary:
+                    st.markdown("*Geographic distribution of cities that have implemented this policy.*")
+                    if 'Lat' in df_filtered.columns and 'Lon' in df_filtered.columns:
+                        map_df = df_filtered.copy()
+                        map_df['Status'] = map_df[metric].map({1: 'Yes', 0: 'No', 1.0: 'Yes', 0.0: 'No'})
+                        map_df = map_df.dropna(subset=['Status', 'Lat', 'Lon'])
+                        
+                        fig_map = px.scatter_geo(
+                            map_df, lat='Lat', lon='Lon', color='Status',
+                            color_discrete_map={'Yes': '#1BBBEC', 'No': '#D53C4C'},
+                            hover_name='City', hover_data={'Lat': False, 'Lon': False, 'Country': True, 'Status': True, metric: False},
+                            projection="natural earth", title=f"Global Adoption: {metric.replace('_', ' ')}"
+                        )
+                        fig_map.update_traces(marker=dict(size=9, line=dict(width=1, color='white')))
+                        fig_map.update_layout(margin=dict(l=0, r=0, t=40, b=0), geo=dict(showland=True, landcolor="#f4f6f9", showcoastlines=True, coastlinecolor="white", showcountries=True, countrycolor="white"))
+                        st.plotly_chart(fig_map, use_container_width=True, config=export_config, key=f"map_{metric}")
+                        
+                        with st.expander("📊 View Regional Percentage Summary"):
+                            agg_df = df_filtered.groupby('Continent')[metric].mean().reset_index()
+                            agg_df[metric] = agg_df[metric] * 100 
+                            fig_bar = px.bar(agg_df, x='Continent', y=metric, color='Continent', template='plotly_white')
+                            fig_bar.update_yaxes(range=[0, 100])
+                            st.plotly_chart(fig_bar, use_container_width=True, config=export_config, key=f"bar_{metric}")
+                else:
+                    st.markdown("*Regional distribution and outliers for this metric.*")
+                    fig_box = px.box(
+                        df_filtered, x='Continent', y=metric, color='Continent', 
+                        points="all", hover_name="City", template='plotly_white'
+                    )
+                    st.plotly_chart(fig_box, use_container_width=True, key=f"box_{metric}", config=export_config)
+                
+                # Statistical Summary
+                st.markdown("**Statistical Summary (Grouped by Region):**")
+                summary_stats = df_filtered.groupby('Continent')[metric].describe()
+                
+                top10_stats = df.nsmallest(10, 'Rank')[metric].describe().to_frame().T
+                top10_stats.index = ['🌟 Global Top 10']
+                top30_stats = df.nsmallest(30, 'Rank')[metric].describe().to_frame().T
+                top30_stats.index = ['🌟 Global Top 30']
+                global100_stats = df[metric].describe().to_frame().T
+                global100_stats.index = ['🌟 Global 100']
+                
+                summary_stats = pd.concat([summary_stats, top10_stats, top30_stats, global100_stats])
+                summary_stats = summary_stats.rename(columns={'count': 'Data Points', 'mean': 'Average', 'std': 'Std Dev', 'min': 'Minimum', '25%': '25th Pct', '50%': 'Median', '75%': '75th Pct', 'max': 'Maximum'})
+                
+                st.dataframe(summary_stats.style.format({col: (lambda x: f"{x:.0f}" if col == 'Data Points' else f"{x:.2f}") for col in summary_stats.columns}), use_container_width=True)
+                
+                with st.expander(f"🏅 View City Rankings: {metric.replace('_', ' ')}"):
+                    is_lower_better = "death" in metric.lower() or "safety_rate" in metric.lower()
+                    ranking_df = df_filtered[['City', 'Country', 'Continent', metric]].dropna(subset=[metric])
+                    ranking_df = ranking_df.sort_values(by=metric, ascending=is_lower_better).reset_index(drop=True)
+                    ranking_df.index = ranking_df.index + 1 
+                    if is_binary:
+                        ranking_df[metric] = ranking_df[metric].map({1: 'Yes', 0: 'No', 1.0: 'Yes', 0.0: 'No'})
+                        st.dataframe(ranking_df, use_container_width=True)
+                    else:
+                        st.dataframe(ranking_df.style.format({metric: "{:.2f}"}), use_container_width=True)
+                st.markdown("---")
 
 # --- TAB 6: 3 CORE PILLARS ANALYSIS ---
 with tab6:
@@ -938,14 +957,11 @@ with tab6:
         st.markdown("---")
         
         # --- 2. Ternary Plot (Balance) ---
-        col_ternary, col_parallel = st.columns([1.2, 1])
-        
-        with col_ternary:
-            st.markdown("### 🔺 The Balance Triangle (Ternary Plot)")
-            st.markdown("This plot shows the *proportion* of a city's strengths. Cities closer to the center are perfectly balanced. " \
+        st.markdown("### 🔺 The Balance Triangle (Ternary Plot)")
+        st.markdown("This plot shows the *proportion* of a city's strengths. Cities closer to the center are perfectly balanced. " \
             "Cities pulled toward a corner rely heavily on that specific pillar.")
             
-            fig_ternary = px.scatter_ternary(
+        fig_ternary = px.scatter_ternary(
                 df_filtered, 
                 a='Safe and Connected Infrastructure', 
                 b='Usage and Reach', 
@@ -955,7 +971,7 @@ with tab6:
                 size='Index Score', # Bigger bubbles = higher overall score
                 template='plotly_white'
             )
-            fig_ternary.update_layout(
+        fig_ternary.update_layout(
                 ternary=dict(
                     sum=100,
                     aaxis_title="Infrastructure",
@@ -965,9 +981,8 @@ with tab6:
                 height=500,
                 margin=dict(l=20, r=20, t=40, b=30)
             )
-            st.plotly_chart(fig_ternary, use_container_width=True, config=export_config)
+        st.plotly_chart(fig_ternary, use_container_width=True, config=export_config)
 
-       
         st.markdown("---")
         
         # --- 3. Searchable Data Table ---
