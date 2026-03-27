@@ -40,7 +40,7 @@ def generate_pdf_report(city_data, sorted_scores, missing_policies):
     
     # Insert Logo 
     try:
-        pdf.image("logo.png", x=10, y=8, w=45)
+        pdf.image("logo.png", x=170, y=8, w=35)
     except FileNotFoundError:
         pass 
     
